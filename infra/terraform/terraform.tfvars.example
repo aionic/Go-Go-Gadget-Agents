@@ -1,0 +1,49 @@
+# Copy to terraform.tfvars and adjust as needed.
+
+environment_name = "ggga"
+location         = "westus3"
+foundry_location = "eastus2" # region for the Foundry account + model deployments
+
+# tags = {
+#   owner   = "hackathon-team"
+#   project = "go-go-gadget-agents"
+# }
+
+# --- Model deployments (defaults shown) ---
+# llm_deployment = {
+#   name     = "gpt-5.4-mini"
+#   model    = "gpt-5.4-mini"
+#   version  = "2026-03-17"
+#   capacity = 50
+#   sku      = "GlobalStandard"
+# }
+# embedding_deployment = {
+#   name     = "text-embedding-3-large"
+#   model    = "text-embedding-3-large"
+#   version  = "1"
+#   capacity = 50
+#   sku      = "Standard"
+# }
+
+# --- PostgreSQL ---
+postgres_administrator_login = "pgadmin"
+postgres_database_name       = "agentdb"
+enable_pgvector              = true
+run_postgres_seed            = true
+
+# --- Add-on toggles ---
+enable_app_insights          = true
+enable_service_bus           = true
+enable_cosmos_db             = true
+enable_dapr                  = true
+enable_document_intelligence = true
+
+# --- Networking ---
+# Leave empty to auto-detect the deployer's public IP for firewall rules.
+allowed_ip_address = ""
+# Leave empty to auto-detect the deploying principal's object ID.
+principal_id = ""
+# Restrict the AI Search service to the deployer's IP. Set to false to use
+# RBAC-only (no IP filter) — required where corpnet egress IPs vary by
+# destination, or in policy-governed subscriptions. See docs/deployment.md.
+restrict_public_ip = true
