@@ -40,6 +40,20 @@ module "container_apps_env" {
 
   dapr_application_insights_connection_string = var.enable_app_insights ? module.app_insights[0].connection_string : null
 
+  # Workload-profiles environment with a custom VNet so app egress routes
+  # through the infrastructure subnet and can reach the Cosmos private
+  # endpoint (Cosmos public access is force-disabled by Azure Policy).
+  workload_profiles = [
+    {
+      name                  = "Consumption"
+      workload_profile_type = "Consumption"
+    }
+  ]
+  vnet_configuration = {
+    infrastructure_subnet_id = azurerm_subnet.cae_infra.id
+    internal                 = false
+  }
+
   zone_redundant = false
 }
 
@@ -55,6 +69,7 @@ module "agent_app" {
   enable_telemetry                      = false
   container_app_environment_resource_id = module.container_apps_env.resource_id
   revision_mode                         = "Single"
+  workload_profile_name                 = "Consumption"
 
   managed_identities = {
     user_assigned_resource_ids = [module.uami.resource_id]
