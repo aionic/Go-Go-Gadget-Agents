@@ -21,8 +21,11 @@ interface ChatRequest {
 
 const PROJECT_ENDPOINT = process.env.FOUNDRY_PROJECT_ENDPOINT ?? "";
 const AGENT_ID = process.env.FOUNDRY_AGENT_ID ?? "";
-// Display name of the primary/orchestrator agent (multi-agent flow UI).
+// Display name of the primary/orchestrator (router) agent.
 const AGENT_NAME = process.env.FOUNDRY_AGENT_NAME || "Agent";
+// Sub-agent display names — resolved to ids by name at runtime.
+const RESEARCHER_NAME = "Researcher";
+const WRITER_NAME = "Writer";
 // When set, stream a scripted multi-agent handoff sequence so the UI/UX can be
 // demonstrated without a live Foundry multi-agent backend.
 const DEMO_MULTI_AGENT = process.env.DEMO_MULTI_AGENT === "true";
@@ -107,8 +110,11 @@ export async function POST(request: NextRequest) {
       try {
         const project = getProject();
         const agents = project.agents;
+        const ids = await resolveAgentIds(agents);
+        const researcherId = ids[RESEARCHER_NAME];
+        const writerId = ids[WRITER_NAME];
 
-        // Reuse the existing thread (Cosmos-backed by Foundry) or create one.
+        // Conversation thread (Cosmos-backed by Foundry) for the router turn.
         let threadId = body.thread_id ?? "";
         if (!threadId) {
           const thread = await agents.threads.create();
@@ -116,110 +122,65 @@ export async function POST(request: NextRequest) {
         }
 
         send({ type: "start", thread_id: threadId });
-        // Primary/orchestrator agent begins the workflow.
+        // The Planner runs first as a router: decide direct vs pipeline.
         send({ type: "agent_start", agent: AGENT_NAME });
 
         await agents.messages.create(threadId, "user", lastUser.content);
+        const routerRaw = await runAgentText(agents, threadId, AGENT_ID);
+        const decision = parseDecision(routerRaw);
 
-        const streamEvents = await agents.runs
-          .create(threadId, AGENT_ID)
-          .stream();
+        if (decision.mode === "pipeline" && researcherId && writerId) {
+          // --- Multi-agent pipeline: only when the request warrants it. ---
+          const brief = decision.brief || lastUser.content;
 
-        for await (const event of streamEvents as AsyncIterable<{
-          event: string;
-          data: unknown;
-        }>) {
-          switch (event.event) {
-            case "thread.message.delta": {
-              const delta = event.data as {
-                delta?: {
-                  content?: Array<{ type: string; text?: { value?: string } }>;
-                };
-              };
-              const text = (delta.delta?.content ?? [])
-                .filter((c) => c.type === "text")
-                .map((c) => c.text?.value ?? "")
-                .join("");
-              if (text) send({ type: "text_delta", content: text });
-              break;
-            }
-            case "thread.run.step.created": {
-              const step = event.data as {
-                id?: string;
-                type?: string;
-                step_details?: {
-                  tool_calls?: Array<{
-                    id?: string;
-                    type?: string;
-                    name?: string;
-                    connected_agent?: { name?: string };
-                  }>;
-                };
-              };
-              for (const call of step.step_details?.tool_calls ?? []) {
-                const connectedAgent = connectedAgentName(call);
-                if (connectedAgent) {
-                  // A connected/sub-agent picked up the work — render a handoff.
-                  send({
-                    type: "agent_handoff",
-                    from: AGENT_NAME,
-                    to: connectedAgent,
-                    reason: "Delegated sub-task",
-                  });
-                } else {
-                  send({
-                    type: "tool_running",
-                    name: call.type ?? "tool",
-                    call_id: call.id ?? step.id,
-                  });
-                }
-              }
-              break;
-            }
-            case "thread.run.step.completed": {
-              const step = event.data as {
-                id?: string;
-                step_details?: {
-                  tool_calls?: Array<{
-                    id?: string;
-                    type?: string;
-                    name?: string;
-                    connected_agent?: { name?: string };
-                  }>;
-                };
-              };
-              for (const call of step.step_details?.tool_calls ?? []) {
-                const connectedAgent = connectedAgentName(call);
-                if (connectedAgent) {
-                  // Sub-agent finished — control returns to the orchestrator.
-                  send({
-                    type: "agent_handoff",
-                    from: connectedAgent,
-                    to: AGENT_NAME,
-                    reason: "Returned result",
-                  });
-                } else {
-                  send({
-                    type: "tool_done",
-                    call_id: call.id ?? step.id,
-                  });
-                }
-              }
-              break;
-            }
-            case "thread.run.failed": {
-              const run = event.data as { last_error?: { message?: string } };
-              send({
-                type: "error",
-                message: run.last_error?.message ?? "Agent run failed",
-              });
-              break;
-            }
-            case "error": {
-              const err = event.data as { message?: string };
-              send({ type: "error", message: err.message ?? "Stream error" });
-              break;
-            }
+          // 1) Researcher gathers structured findings (buffered).
+          send({
+            type: "agent_handoff",
+            from: AGENT_NAME,
+            to: RESEARCHER_NAME,
+            reason: "Gather supporting facts",
+          });
+          send({
+            type: "tool_running",
+            agent: RESEARCHER_NAME,
+            name: "research",
+            call_id: "research",
+          });
+          const rThread = (await agents.threads.create()).id;
+          await agents.messages.create(
+            rThread,
+            "user",
+            `User request:\n${lastUser.content}\n\nPlanner brief:\n${brief}`
+          );
+          const findings = await runAgentText(agents, rThread, researcherId);
+          send({ type: "tool_done", call_id: "research" });
+
+          // 2) Writer composes the final answer (streamed to the client).
+          send({
+            type: "agent_handoff",
+            from: RESEARCHER_NAME,
+            to: WRITER_NAME,
+            reason: "Compose the final answer",
+          });
+          const wThread = (await agents.threads.create()).id;
+          await agents.messages.create(
+            wThread,
+            "user",
+            `User request:\n${lastUser.content}\n\nResearcher findings:\n${findings}`
+          );
+          await runAgentText(agents, wThread, writerId, (chunk) =>
+            send({ type: "text_delta", agent: WRITER_NAME, content: chunk })
+          );
+        } else {
+          // --- Direct answer: the Planner already handled a simple request. ---
+          const answer = (decision.answer ?? routerRaw).trim();
+          const CHUNK = 24;
+          for (let i = 0; i < answer.length; i += CHUNK) {
+            send({
+              type: "text_delta",
+              agent: AGENT_NAME,
+              content: answer.slice(i, i + CHUNK),
+            });
           }
         }
 
@@ -243,15 +204,101 @@ export async function POST(request: NextRequest) {
   });
 }
 
-// Detect a Foundry connected/sub-agent tool call and return its display name.
-function connectedAgentName(call: {
-  type?: string;
-  name?: string;
-  connected_agent?: { name?: string };
-}): string | undefined {
-  if (call.connected_agent?.name) return call.connected_agent.name;
-  if (call.type === "connected_agent") return call.name ?? "Sub-agent";
-  return undefined;
+// Resolve sub-agent ids (Researcher/Writer) by display name, cached for the
+// lifetime of the server process. The orchestration is client-side now, so we
+// look the ids up rather than threading them through env vars.
+let _agentIdsByName: Record<string, string> | null = null;
+async function resolveAgentIds(
+  agents: AIProjectClient["agents"]
+): Promise<Record<string, string>> {
+  if (_agentIdsByName) return _agentIdsByName;
+  const map: Record<string, string> = {};
+  const list = (
+    agents as unknown as {
+      listAgents: () => AsyncIterable<{ id: string; name?: string }>;
+    }
+  ).listAgents();
+  for await (const agent of list) {
+    if (agent.name) map[agent.name] = agent.id;
+  }
+  _agentIdsByName = map;
+  return map;
+}
+
+// Run an agent to completion on a thread, accumulating its assistant text.
+// `onDelta` (when provided) streams each text chunk to the client.
+async function runAgentText(
+  agents: AIProjectClient["agents"],
+  threadId: string,
+  agentId: string,
+  onDelta?: (chunk: string) => void
+): Promise<string> {
+  const events = await agents.runs.create(threadId, agentId).stream();
+  let text = "";
+  for await (const event of events as AsyncIterable<{
+    event: string;
+    data: unknown;
+  }>) {
+    if (event.event === "thread.message.delta") {
+      const delta = event.data as {
+        delta?: {
+          content?: Array<{ type: string; text?: { value?: string } }>;
+        };
+      };
+      const chunk = (delta.delta?.content ?? [])
+        .filter((c) => c.type === "text")
+        .map((c) => c.text?.value ?? "")
+        .join("");
+      if (chunk) {
+        text += chunk;
+        onDelta?.(chunk);
+      }
+    } else if (event.event === "thread.run.failed") {
+      const run = event.data as { last_error?: { message?: string } };
+      throw new Error(run.last_error?.message ?? "Agent run failed");
+    } else if (event.event === "error") {
+      const err = event.data as { message?: string };
+      throw new Error(err.message ?? "Stream error");
+    }
+  }
+  return text;
+}
+
+// Parse the Planner router's JSON decision, tolerating code fences / stray text.
+function parseDecision(raw: string): {
+  mode: "direct" | "pipeline";
+  answer?: string;
+  brief?: string;
+} {
+  let s = raw.trim();
+  if (s.startsWith("```")) {
+    s = s.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, "").trim();
+  }
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  try {
+    const o = JSON.parse(s) as {
+      mode?: string;
+      answer?: unknown;
+      brief?: unknown;
+    };
+    if (o.mode === "pipeline") {
+      return {
+        mode: "pipeline",
+        brief: typeof o.brief === "string" ? o.brief : undefined,
+      };
+    }
+    if (o.mode === "direct") {
+      return {
+        mode: "direct",
+        answer: typeof o.answer === "string" ? o.answer : undefined,
+      };
+    }
+  } catch {
+    // fall through — treat the raw text as a direct answer
+  }
+  return { mode: "direct", answer: raw.trim() };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
