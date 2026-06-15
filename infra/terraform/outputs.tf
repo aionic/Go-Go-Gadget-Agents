@@ -98,8 +98,3 @@ output "container_apps_environment_id" {
   value       = module.container_apps_env.resource_id
   description = "Container Apps Environment resource ID."
 }
-
-output "agent_app_fqdn" {
-  value       = module.agent_app.fqdn_url
-  description = "Public URL of the placeholder agent Container App."
-}
