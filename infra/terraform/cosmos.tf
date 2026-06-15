@@ -13,8 +13,8 @@ module "cosmos" {
   tags                = local.tags
   enable_telemetry    = false
 
-  public_network_access_enabled = true
-  local_authentication_disabled = false
+  public_network_access_enabled = false # Azure Policy force-disables public access in this subscription; align IaC to avoid perpetual drift.
+  local_authentication_disabled = true  # Azure Policy disables account keys; app + deployer use Entra/MI data-plane roles.
 
   # westus3 currently lacks zone-redundant Cosmos capacity; pin single-zone.
   geo_locations = [
@@ -37,6 +37,10 @@ module "cosmos" {
         threads = {
           name                = "threads"
           partition_key_paths = ["/sessionId"]
+        }
+        feedback = {
+          name                = "feedback"
+          partition_key_paths = ["/threadId"]
         }
       }
     }

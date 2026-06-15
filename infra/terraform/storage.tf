@@ -18,7 +18,7 @@ module "storage" {
   https_traffic_only_enabled    = true
   min_tls_version               = "TLS1_2"
   shared_access_key_enabled     = false
-  public_network_access_enabled = true
+  public_network_access_enabled = false # Azure Policy force-disables public access in this subscription; align IaC to avoid perpetual drift.
 
   network_rules = {
     default_action = "Allow"

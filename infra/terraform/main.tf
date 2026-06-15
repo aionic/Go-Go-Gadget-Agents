@@ -65,7 +65,7 @@ module "key_vault" {
   enable_telemetry    = false
 
   sku_name                      = "standard"
-  public_network_access_enabled = true
+  public_network_access_enabled = false # Azure Policy force-disables public access in this subscription; align IaC to avoid perpetual drift.
   purge_protection_enabled      = false
 
   network_acls = {

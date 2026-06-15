@@ -85,7 +85,19 @@ resource "time_sleep" "kv_rbac_propagation" {
 }
 
 # Store generated admin password + connection string in Key Vault.
+# Key Vault public network access is force-disabled by Azure Policy in this
+# subscription, so data-plane secret writes cannot run from outside the VNet
+# (e.g. a local Terraform run). These secrets are gated off by default; enable
+# only when applying from within private networking. The architecture is
+# passwordless (managed identity) so these are optional convenience secrets.
+variable "manage_kv_secrets" {
+  description = "Manage the postgres-* Key Vault secrets. Requires Key Vault data-plane reachability (private networking), so keep false for local/public-blocked runs."
+  type        = bool
+  default     = false
+}
+
 resource "azurerm_key_vault_secret" "postgres_password" {
+  count        = var.manage_kv_secrets ? 1 : 0
   name         = "postgres-admin-password"
   value        = random_password.postgres.result
   key_vault_id = module.key_vault.resource_id
@@ -94,6 +106,7 @@ resource "azurerm_key_vault_secret" "postgres_password" {
 }
 
 resource "azurerm_key_vault_secret" "postgres_connection_string" {
+  count        = var.manage_kv_secrets ? 1 : 0
   name         = "postgres-connection-string"
   value        = "host=${module.postgres.fqdn} port=5432 dbname=${var.postgres_database_name} user=${var.postgres_administrator_login} password=${random_password.postgres.result} sslmode=require"
   key_vault_id = module.key_vault.resource_id

@@ -22,6 +22,10 @@ module "foundry" {
   public_network_access_enabled = true
   local_auth_enabled            = false
   allow_project_management      = true
+  # The child project (azapi_resource.foundry_project) registers itself on the
+  # account's associatedProjects list. Declare it here so the AVM module does
+  # not strip the live association on apply.
+  associated_projects = ["${var.environment_name}-agents"]
 
   managed_identities = {
     system_assigned = true

@@ -15,7 +15,7 @@ module "service_bus" {
 
   sku                           = "Standard"
   public_network_access_enabled = true
-  local_auth_enabled            = true
+  local_auth_enabled            = false # Azure Policy disables SAS; UAMI + deployer use data-owner RBAC roles below.
 
   queues = {
     agent_tasks = {
