@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="readme.png" alt="Go-Go-Gadget-Agents — Orchestrating Secure Multi-Agent Systems" width="900" />
+</p>
+
 # Go-Go-Gadget-Agents — End-to-End Agent Demo Infrastructure
 
 ![Terraform](https://img.shields.io/badge/Terraform-%E2%89%A5%201.10-7B42BC?logo=terraform&logoColor=white)
