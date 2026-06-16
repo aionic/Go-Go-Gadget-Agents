@@ -65,3 +65,7 @@ agents at the Foundry account scope.
 
 > Service Bus and Dapr-based self-hosted orchestration from the original design were removed; the
 > Container Apps Environment now hosts only the UI front end.
+
+---
+
+↩ Back to the [documentation hub](README.md) · Related: [design.md](design.md) · [data-flow.md](data-flow.md) · [rbac.md](rbac.md)

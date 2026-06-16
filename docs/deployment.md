@@ -152,3 +152,7 @@ the post-provision scripts (`seed.py`, `configure_foundry_iq.py`) from **within 
 e.g., an Azure Container Instance or Container App job using the shared managed identity —
 rather than from a developer workstation. This satisfies the public-access-disabled policies and
 removes the corpnet-egress firewall fragility.
+
+---
+
+↩ Back to the [documentation hub](README.md) · Related: [best-practices.md](best-practices.md) · [rbac.md](rbac.md) · [architecture.md](architecture.md)

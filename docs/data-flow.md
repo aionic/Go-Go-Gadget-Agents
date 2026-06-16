@@ -68,3 +68,7 @@ sequenceDiagram
 
 Configured by `scripts/foundry_iq/configure_foundry_iq.py` (index, vectorizer, skillset,
 indexer, and knowledge agent). The embedding deployment and dimensions are parameterized.
+
+---
+
+↩ Back to the [documentation hub](README.md) · Related: [orchestration.md](orchestration.md) · [architecture.md](architecture.md)

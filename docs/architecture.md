@@ -112,3 +112,7 @@ flowchart LR
 
 See [data-flow.md](data-flow.md), [orchestration.md](orchestration.md), [rbac.md](rbac.md),
 and [deployment.md](deployment.md) for the detailed flows.
+
+---
+
+↩ Back to the [documentation hub](README.md) · Next: [design.md](design.md) — why it's built this way.

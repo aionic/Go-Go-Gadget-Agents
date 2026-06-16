@@ -83,3 +83,7 @@ User** role at account scope. Those assignments are therefore **not declared in 
 - Cosmos DB data-plane access uses the built-in **Cosmos DB Built-in Data Contributor** SQL role
   (`00000000-0000-0000-0000-000000000002`) for both the UAMI and the deployer.
 - Role assignments are defined inline on AVM modules and in `infra/terraform/rbac.tf`.
+
+---
+
+↩ Back to the [documentation hub](README.md) · Related: [design.md](design.md) · [best-practices.md](best-practices.md)

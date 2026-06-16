@@ -12,192 +12,137 @@
 ![status](https://img.shields.io/badge/status-hackathon%20demo-blueviolet)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Terraform (Azure Verified Modules + AzAPI) that stands up a complete environment for a
-**multi-agent** workflow: a Next.js **Agent UI** on Azure Container Apps that invokes three
-**Foundry hosted agents** (`ggga-planner` → `ggga-researcher` → `ggga-writer`) over the
-Responses protocol, backed by a Foundry IQ RAG stack. This repo is the **infrastructure layer**;
-the UI (`agent-ui/`) and agents (`hosted-agents/`) are deployed on top of it.
+Terraform (Azure Verified Modules + AzAPI) that stands up a complete, passwordless environment
+for a **multi-agent** workflow on Azure AI Foundry — and the application that runs on it.
+
+A Next.js **Agent UI** on Azure Container Apps signs users in with Entra ID and orchestrates three
+**Foundry hosted agents** — `ggga-planner` → `ggga-researcher` → `ggga-writer` — over the Responses
+protocol, grounded by a Foundry IQ RAG stack (AI Search + integrated vectorization + a knowledge agent).
+
+- **One command to the platform** — `terraform apply` provisions ~58 resources in a single resource group.
+- **Passwordless everywhere** — Entra ID + a shared managed identity; the only generated secret (Postgres password) lives in Key Vault.
+- **Hosted agents, not glue code** — agents are immutable Foundry data-plane versions deployed with `azd`; the UI orchestrates the hand-offs.
+- **Grounded answers** — hybrid (keyword + vector + semantic) search with agentic retrieval over your own documents.
 
 ```mermaid
 flowchart TB
-  User["User (browser)"]
-  subgraph RG["Resource Group (single)"]
-    subgraph OBS["Observability"]
-      LA["Log Analytics"]
-      AI["Application Insights"]
-    end
-    UAMI["User-Assigned<br/>Managed Identity"]
-    KV["Key Vault"]
-    subgraph NET["Networking (VNet)"]
-      CAESN["snet-cae-infra"]
-      PESN["snet-pe + private DNS"]
-    end
-    subgraph FRONT["Front end (Container Apps)"]
-      CAE["Container Apps Env<br/>(workload profiles, VNet)"]
+  User["User · browser"]
+  subgraph RG["Resource Group · single lifecycle"]
+    subgraph FRONT["Front end · Container Apps"]
       UI["Agent UI<br/>Next.js · Entra sign-in · SSE"]
+      CAE["Container Apps Env<br/>workload profiles · VNet"]
       ACR["Container Registry"]
     end
     subgraph AGENTS["Foundry hosted agents"]
-      PLAN["ggga-planner (router)"]
+      PLAN["ggga-planner<br/>router"]
       RES["ggga-researcher"]
       WRIT["ggga-writer"]
     end
     subgraph AICORE["AI / RAG"]
-      FOUNDRY["AI Foundry (AIServices)<br/>gpt-5.4-mini · embed-3-large · project"]
-      SEARCH["Azure AI Search<br/>hybrid + agentic retrieval"]
+      FOUNDRY["AI Foundry<br/>gpt-5.4-mini · embed-3-large"]
+      SEARCH["AI Search<br/>hybrid + agentic"]
       DI["Document Intelligence"]
     end
     subgraph DATA["Data"]
-      PG["PostgreSQL Flexible<br/>(pgvector)"]
-      ST["Storage<br/>(rag-source)"]
-      COSMOS["Cosmos DB<br/>(threads + feedback)"]
+      PG["PostgreSQL<br/>pgvector"]
+      ST["Storage<br/>rag-source"]
+      COSMOS["Cosmos DB<br/>threads + feedback"]
     end
+    OBS["Log Analytics<br/>+ App Insights"]
+    KV["Key Vault"]
   end
 
-  User -->|HTTPS + Entra sign-in| UI
-  UI -->|pull image| ACR
-  UI -->|invoke agents (Responses)| FOUNDRY
-  UI -->|thread state / feedback| COSMOS
-  UI -->|secrets| KV
-  UI -->|traces| AI
-  UI -->|hosted on| CAE
-  CAE -->|VNet egress| CAESN
-  COSMOS -. private endpoint .- PESN
-  FOUNDRY --> PLAN
-  PLAN --> RES --> WRIT
-  ACR -->|image pull (project MI)| FOUNDRY
+  User -->|HTTPS + sign-in| UI
+  UI -->|invoke agents| FOUNDRY
+  UI -->|thread state| COSMOS
+  UI -->|traces| OBS
+  UI -.->|hosted on| CAE
+  FOUNDRY --> PLAN --> RES --> WRIT
   RES -->|grounded retrieval| SEARCH
-  SEARCH -->|integrated vectorization| FOUNDRY
-  SEARCH -->|indexer reads blobs| ST
+  SEARCH -->|vectorization| FOUNDRY
+  SEARCH -->|reads blobs| ST
   SEARCH -.->|enrich| DI
-  FOUNDRY -->|agentic queries| SEARCH
-  AI --> LA
-  UAMI -.->|passwordless auth| UI
+  ACR -->|images| UI
+  ACR -->|images| FOUNDRY
 ```
 
-## Documentation
+> New here? Read [docs/architecture.md](docs/architecture.md) for the full system, or jump
+> straight to the [Quickstart](#quickstart) below.
 
-| Doc | Contents |
-|-----|----------|
-| [docs/README.md](docs/README.md) | Documentation index |
-| [docs/architecture.md](docs/architecture.md) | System architecture (Mermaid) + module strategy |
-| [docs/data-flow.md](docs/data-flow.md) | RAG ingestion & agentic retrieval (sequence diagrams) |
-| [docs/orchestration.md](docs/orchestration.md) | Multi-agent / multi-step orchestration flow |
-| [docs/rbac.md](docs/rbac.md) | Passwordless identity & RBAC matrix |
-| [docs/deployment.md](docs/deployment.md) | Deployment & post-provision workflow |
+## Repository layout
 
-## What gets deployed
+| Path | What it is |
+|------|------------|
+| [`infra/terraform/`](infra/terraform/) | The platform — AVM + AzAPI Terraform for all Azure resources |
+| [`agent-ui/`](agent-ui/) | Next.js chat UI (Entra sign-in, SSE, agent orchestration) — see [agent-ui/README.md](agent-ui/README.md) |
+| [`hosted-agents/`](hosted-agents/) | Planner / Researcher / Writer Foundry agents — see [hosted-agents/README.md](hosted-agents/README.md) |
+| [`scripts/`](scripts/) | Post-provision: Postgres seed + Foundry IQ (RAG) configuration |
+| [`docs/`](docs/) | Architecture, design decisions, data flow, RBAC, best practices, deployment |
 
-| Layer | Resources |
-|-------|-----------|
-| **Foundation** | Resource Group, shared User-Assigned Managed Identity, Log Analytics, Application Insights, Key Vault |
-| **Data** | PostgreSQL Flexible Server (Entra + password, pgvector), Storage Account (`rag-source` container), Cosmos DB (agent thread/state) |
-| **AI** | Azure AI Foundry (AIServices) account + project, `gpt-5.4-mini` (LLM) + `text-embedding-3-large` (embeddings), Azure AI Search (hybrid), Document Intelligence |
-| **Front end** | Next.js **Agent UI** Container App (Entra sign-in + SSE chat proxy) on a VNet-integrated, workload-profiles Container Apps Environment |
-| **Agents** | Three **Foundry hosted agents** (`ggga-planner` → `ggga-researcher` → `ggga-writer`) on the Foundry managed agent service (deployed with `azd`) |
-| **Compute** | Azure Container Registry (UI + agent images) |
-| **Networking** | Custom VNet (CAE infrastructure subnet) + Cosmos DB private endpoint & private DNS zone |
-| **RAG / Foundry IQ** | AI Search index + integrated vectorization + indexer over Storage, knowledge agent (agentic retrieval) configured post-deploy |
+## Quickstart
 
-All service-to-service auth is **passwordless** (Entra ID + the shared managed identity).
-The only generated secret (Postgres admin password) is stored in Key Vault.
+### Prerequisites
 
-## Prerequisites
+- **Terraform >= 1.10** — `winget install Hashicorp.Terraform`
+- **Azure CLI**, logged in (`az login`); the deployer is granted data-plane admin roles
+- **uv** for the post-provision Python scripts — https://docs.astral.sh/uv/
+- **azd** (`azd auth login`) to deploy the hosted agents
+- A subscription with quota for the Foundry models in `foundry_location`
 
-- **Terraform >= 1.10** (the AVM storage submodules require it). Install: `winget install Hashicorp.Terraform`.
-- **Azure CLI**, logged in: `az login` (the deployer's identity is granted data-plane admin roles).
-- **uv** (for the post-provision Python scripts): https://docs.astral.sh/uv/
-- A subscription with quota for the requested Foundry models in `foundry_location`.
-
-## Deploy
+### 1. Provision the platform
 
 ```powershell
 cd infra/terraform
 Copy-Item terraform.tfvars.example terraform.tfvars   # edit as needed
-
 terraform init
-terraform validate
-terraform plan -out tfplan
-terraform apply tfplan
+terraform apply
 ```
 
-Post-provision steps run automatically via `local-exec`:
-1. **Postgres seed** (`scripts/seed_postgres`, `uv run seed.py`) — builds the schema and seeds sample data.
-2. **Foundry IQ config** (`scripts/foundry_iq`, `uv run configure_foundry_iq.py`) — creates the
-   Search index, integrated vectorizer, skillset, indexer, and knowledge agent.
+Post-provision steps run automatically via `local-exec`: the **Postgres seed**
+(`scripts/seed_postgres`) and **Foundry IQ** RAG configuration (`scripts/foundry_iq`). If running
+from CI / a service principal, set `entra_admin_principal_type = "ServicePrincipal"`.
 
-> If running from CI / a service principal, set `entra_admin_principal_type = "ServicePrincipal"`.
-
-### Deploy the app (UI + hosted agents)
-
-Terraform provisions the platform; the application is deployed on top of it:
+### 2. Deploy the app
 
 ```powershell
-# 1. Build & push the UI image, then set agent_ui_image in tfvars and re-apply
+# Build & push the UI image, set agent_ui_image in tfvars, then re-apply
 az acr build --registry <acr-name> --image agent-ui:<tag> ./agent-ui
 
-# 2. Deploy each Foundry hosted agent (imperative; agent version is a Foundry data-plane object)
-cd hosted-agents/planner    ; azd deploy
-cd ../researcher            ; azd deploy
-cd ../writer                ; azd deploy
+# Deploy each hosted agent (the agent version is a Foundry data-plane object)
+cd hosted-agents/planner ; azd deploy
+cd ../researcher         ; azd deploy
+cd ../writer             ; azd deploy
 ```
 
-The UI signs users in with Entra ID; register an Entra app with a **web** redirect URI matching
-the `agent_ui_redirect_uri` output and supply `azure_ad_client_id` / `azure_ad_client_secret` in
-`terraform.tfvars`. The client secret is stored as a **native Container App secret** (encrypted,
-surfaced via `secretRef`) — see [docs/deployment.md](docs/deployment.md).
+### 3. Configure sign-in
 
-## Key variables
+Register an Entra app with a **web** redirect URI matching the `agent_ui_redirect_uri` Terraform
+output, then set `azure_ad_client_id` / `azure_ad_client_secret` in `terraform.tfvars` and re-apply.
+The secret is stored as a **native Container App secret** (encrypted, surfaced via `secretRef`).
 
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `environment_name` | `ggga` | Drives resource names |
-| `location` | `westus3` | Primary region |
-| `foundry_location` | `eastus2` | Region for Foundry + models (model availability) |
-| `enable_pgvector` | `true` | pgvector extension on Postgres |
-| `run_postgres_seed` | `true` | Run schema + seed post-provision |
-| `enable_app_insights` / `enable_cosmos_db` / `enable_document_intelligence` | `true` | Add-on toggles |
-| `agent_ui_image` | placeholder | UI container image (`<acr>.azurecr.io/agent-ui:<tag>`) |
-| `azure_ad_client_id` / `azure_ad_client_secret` | `""` | Entra app for UI sign-in (secret stored as a native Container App secret) |
-| `allowed_ip_address` | `""` (auto-detect) | Firewall allow-list IP |
-| `principal_id` | `""` (auto-detect) | Deployer object ID for data-plane roles |
-| `restrict_public_ip` | `true` | Restrict AI Search to the deployer IP; set `false` for RBAC-only (corpnet / policy-governed subs) |
+Open the `agent_ui_fqdn` output, sign in, and chat — the planner → researcher → writer pipeline
+runs live. For full deploy details, prerequisites, and the validated-deployment report, see
+[docs/deployment.md](docs/deployment.md).
 
-## Outputs
-
-Endpoints, names, and connection info needed by the UI and agents (Foundry project endpoint,
-Search, Postgres, Cosmos, ACR, Key Vault, App Insights, UI app URL + Entra redirect URI) are
-exposed as Terraform outputs.
-
-## Teardown
+### Teardown
 
 ```powershell
-terraform destroy
+cd infra/terraform ; terraform destroy
 ```
 
-## Notes & caveats
+## Documentation
 
-- **Model availability** in `westus3` is the main risk — `gpt-5.4-mini` / `text-embedding-3-large`
-  may only be in select regions, hence the separate `foundry_location` (default `eastus2`).
-  Verify the model version per region with `az cognitiveservices model list`.
-- **Foundry IQ knowledge agent** is created with the typed `azure-search-documents` SDK
-  (`SearchIndexClient.create_or_update_agent`), which pins a compatible preview API version.
-- Networking is **VNet-integrated**: a custom VNet hosts the Container Apps Environment plus a
-  **Cosmos DB private endpoint** (Cosmos public access is policy-disabled). The UI reaches
-  Foundry / ACR over public endpoints.
-- State is **local**. Switch to a remote `azurerm` backend for shared/team use.
+Start at the **[documentation hub](docs/README.md)**, or jump directly:
 
-### Deployment validated ✅
-
-A full `terraform apply` was run end-to-end against an Azure (MCAPS) subscription: all ~58
-resources deployed, both models + the Foundry project reached `Succeeded`, and the Foundry IQ
-RAG/agentic pipeline (`rag-index` + `agents-knowledge` agent) was created via `local-exec`.
-See [docs/deployment.md](docs/deployment.md) for the full validation report, the bugs found &
-fixed, and the **policy-governed-subscription** constraints (public-network-access disabled on
-Key Vault/Postgres, Cognitive local-auth disabled, Cosmos `listKeys` deny assignment, corpnet
-egress variance) with the recommended private-networking approach for customer environments.
-
-See the [documentation index](docs/README.md) for architecture, data-flow, RBAC, and deployment diagrams.
+| Doc | Contents |
+|-----|----------|
+| [Architecture](docs/architecture.md) | System diagram, components, module strategy |
+| [Design decisions](docs/design.md) | The *why* — hosted agents, Responses protocol, networking, secrets |
+| [Data flow](docs/data-flow.md) | RAG ingestion + agentic retrieval (sequence diagrams) |
+| [Orchestration](docs/orchestration.md) | Planner → Researcher → Writer pipeline |
+| [Identity & RBAC](docs/rbac.md) | Passwordless model + role matrix |
+| [Best practices](docs/best-practices.md) | Security, networking, and operations guidance |
+| [Deployment](docs/deployment.md) | Deploy + post-provision workflow, validation report |
 
 ## License
 
