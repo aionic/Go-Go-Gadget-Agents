@@ -9,7 +9,6 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@azure/ai-projects": "^1.0.0",
     "@azure/cosmos": "^4.2.0",
     "@azure/identity": "^4.5.0",
     "@tailwindcss/typography": "^0.5.19",

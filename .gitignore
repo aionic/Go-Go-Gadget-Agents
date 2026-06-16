@@ -35,6 +35,3 @@ uv.lock
 # OS
 .DS_Store
 Thumbs.db
-
-# Foundry agent creation output
-scripts/foundry_agents/planner_agent_id.txt

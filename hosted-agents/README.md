@@ -2,8 +2,8 @@
 
 Three [Microsoft Agent Framework](https://github.com/microsoft/agent-framework)
 agents hosted on Microsoft Foundry using the **Responses protocol**. These are
-the "microVM" / hosted-container replacements for the classic Assistants-API
-agents created by [`scripts/foundry_agents/create_agents.py`](../scripts/foundry_agents/create_agents.py).
+the "microVM" / hosted-container agents that the UI invokes for the
+Planner → Researcher → Writer pipeline.
 
 Each agent runs as its own container (`ResponsesHostServer` on port `8088`) and
 is registered with Foundry as `kind: hosted`.

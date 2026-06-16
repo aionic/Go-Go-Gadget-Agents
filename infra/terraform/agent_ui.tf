@@ -11,8 +11,9 @@
 locals {
   agent_ui_name = "${local.abbrs.containerApp}ui-${var.environment_name}-${local.resource_token}"
 
-  # Foundry *project* endpoint for the @azure/ai-projects SDK. Override via
-  # var.foundry_project_endpoint; otherwise derive the unified services host.
+  # Foundry *project* endpoint for the hosted agents (Responses protocol).
+  # Override via var.foundry_project_endpoint; otherwise derive the unified
+  # services host.
   foundry_project_endpoint = var.foundry_project_endpoint != "" ? var.foundry_project_endpoint : "https://${local.foundry_account_name}.services.ai.azure.com/api/projects/${azapi_resource.foundry_project.name}"
 }
 
@@ -134,7 +135,7 @@ variable "agent_ui_image" {
 
 variable "foundry_project_endpoint" {
   type        = string
-  description = "Explicit Foundry project endpoint for @azure/ai-projects. If empty, derived from the account subdomain + project name."
+  description = "Explicit Foundry project endpoint for the hosted-agent Responses protocol. If empty, derived from the account subdomain + project name."
   default     = ""
 }
 
@@ -166,5 +167,5 @@ output "agent_ui_redirect_uri" {
 
 output "foundry_project_endpoint" {
   value       = local.foundry_project_endpoint
-  description = "Foundry project endpoint consumed by the UI (@azure/ai-projects)."
+  description = "Foundry project endpoint consumed by the UI (hosted-agent Responses protocol)."
 }

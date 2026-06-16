@@ -13,7 +13,6 @@ locals {
     docIntelligence   = "di-"
     postgres          = "psql-"
     cosmos            = "cosmos-"
-    serviceBus        = "sb-"
     containerRegistry = "cr"
     containerAppsEnv  = "cae-"
     containerApp      = "ca-"
