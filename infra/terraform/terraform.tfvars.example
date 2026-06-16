@@ -33,9 +33,7 @@ run_postgres_seed            = true
 
 # --- Add-on toggles ---
 enable_app_insights          = true
-enable_service_bus           = true
 enable_cosmos_db             = true
-enable_dapr                  = true
 enable_document_intelligence = true
 
 # --- Networking ---

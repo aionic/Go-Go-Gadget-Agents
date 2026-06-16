@@ -35,12 +35,14 @@ How an agent answers a complex question with grounded, cited results.
 sequenceDiagram
   autonumber
   actor User
-  participant Agent as Agent (Container App)
+  participant UI as Agent UI (Container App)
+  participant Agent as Foundry hosted agent (ggga-researcher)
   participant KA as Foundry IQ Knowledge Agent
   participant LLM as gpt-5.4-mini
   participant Index as Search Index (hybrid)
 
-  User->>Agent: question
+  User->>UI: question
+  UI->>Agent: invoke (Responses protocol)
   Agent->>KA: retrieve(question, chat history)
   KA->>LLM: decompose into subqueries
   LLM-->>KA: subqueries
@@ -53,7 +55,8 @@ sequenceDiagram
   KA-->>Agent: grounded passages + citations
   Agent->>LLM: synthesize answer (with context)
   LLM-->>Agent: answer
-  Agent-->>User: cited answer
+  Agent-->>UI: cited answer (streamed)
+  UI-->>User: cited answer (SSE)
 ```
 
 ## Why hybrid + agentic

@@ -119,21 +119,9 @@ variable "enable_app_insights" {
   default     = true
 }
 
-variable "enable_service_bus" {
-  type        = bool
-  description = "Provision Service Bus for async multi-agent orchestration."
-  default     = true
-}
-
 variable "enable_cosmos_db" {
   type        = bool
   description = "Provision Cosmos DB for agent thread/state/memory."
-  default     = true
-}
-
-variable "enable_dapr" {
-  type        = bool
-  description = "Enable Dapr on the Container Apps Environment."
   default     = true
 }
 

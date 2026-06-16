@@ -65,7 +65,6 @@ locals {
   role_search_index_data_ctb = "Search Index Data Contributor"
   role_search_index_data_rdr = "Search Index Data Reader"
   role_search_service_ctb    = "Search Service Contributor"
-  role_servicebus_data_owner = "Azure Service Bus Data Owner"
 
   # Reused resource names (modules that don't emit a name/url output).
   search_name = "${local.abbrs.searchService}${var.environment_name}-${local.resource_token}"

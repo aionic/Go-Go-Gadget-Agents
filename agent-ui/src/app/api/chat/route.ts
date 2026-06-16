@@ -1,11 +1,10 @@
 import { NextRequest } from "next/server";
-import { AIProjectClient } from "@azure/ai-projects";
-import { DefaultAzureCredential } from "@azure/identity";
+import { DefaultAzureCredential, type AccessToken } from "@azure/identity";
 import { getSession } from "@/lib/auth-session";
 
-// Foundry agents run server-side (Node) so the managed-identity credential
-// never reaches the browser. The Container App's user-assigned identity is
-// selected via AZURE_CLIENT_ID.
+// Foundry hosted agents are invoked server-side (Node) via the OpenAI Responses
+// protocol so the managed-identity credential never reaches the browser. The
+// Container App's user-assigned identity is selected via AZURE_CLIENT_ID.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -19,31 +18,125 @@ interface ChatRequest {
   thread_id?: string | null;
 }
 
-const PROJECT_ENDPOINT = process.env.FOUNDRY_PROJECT_ENDPOINT ?? "";
-const AGENT_ID = process.env.FOUNDRY_AGENT_ID ?? "";
-// Display name of the primary/orchestrator (router) agent.
-const AGENT_NAME = process.env.FOUNDRY_AGENT_NAME || "Agent";
-// Sub-agent display names — resolved to ids by name at runtime.
-const RESEARCHER_NAME = "Researcher";
-const WRITER_NAME = "Writer";
+const PROJECT_ENDPOINT = (process.env.FOUNDRY_PROJECT_ENDPOINT ?? "").replace(
+  /\/$/,
+  ""
+);
+// Hosted-agent names (Responses protocol). Override via env if renamed.
+const PLANNER_AGENT = process.env.PLANNER_AGENT_NAME || "ggga-planner";
+const RESEARCHER_AGENT = process.env.RESEARCHER_AGENT_NAME || "ggga-researcher";
+const WRITER_AGENT = process.env.WRITER_AGENT_NAME || "ggga-writer";
+// Display names surfaced to the UI for the handoff visualisation.
+const PLANNER_LABEL = "Planner";
+const RESEARCHER_LABEL = "Researcher";
+const WRITER_LABEL = "Writer";
 // When set, stream a scripted multi-agent handoff sequence so the UI/UX can be
-// demonstrated without a live Foundry multi-agent backend.
+// demonstrated without a live Foundry backend.
 const DEMO_MULTI_AGENT = process.env.DEMO_MULTI_AGENT === "true";
 
-// Lazily construct the client so build-time (no env) doesn't throw.
-let _project: AIProjectClient | null = null;
-function getProject(): AIProjectClient {
-  if (!_project) {
-    _project = new AIProjectClient(
-      PROJECT_ENDPOINT,
-      new DefaultAzureCredential()
-    );
-  }
-  return _project;
-}
+// Data-plane scope for Foundry agent Responses endpoints.
+const AI_SCOPE = "https://ai.azure.com/.default";
 
 function sse(data: unknown): string {
   return `data: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`;
+}
+
+// ── Auth: cache a Foundry data-plane token across requests. ──
+let _credential: DefaultAzureCredential | null = null;
+let _token: AccessToken | null = null;
+function getCredential(): DefaultAzureCredential {
+  if (!_credential) _credential = new DefaultAzureCredential();
+  return _credential;
+}
+async function getToken(): Promise<string> {
+  // Refresh when missing or within 5 minutes of expiry.
+  if (!_token || _token.expiresOnTimestamp - Date.now() < 5 * 60 * 1000) {
+    _token = await getCredential().getToken(AI_SCOPE);
+    if (!_token) throw new Error("Failed to acquire Foundry access token");
+  }
+  return _token.token;
+}
+
+function responsesUrl(agentName: string): string {
+  return `${PROJECT_ENDPOINT}/agents/${agentName}/endpoint/protocols/openai/responses?api-version=v1`;
+}
+
+// Invoke a hosted agent and return its full assistant text (non-streaming).
+async function invokeAgent(agentName: string, input: string): Promise<string> {
+  const res = await fetch(responsesUrl(agentName), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${await getToken()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ input, stream: false }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${agentName} responded ${res.status}: ${body}`);
+  }
+  const json = (await res.json()) as {
+    output?: Array<{
+      type: string;
+      content?: Array<{ type: string; text?: string }>;
+    }>;
+  };
+  const message = (json.output ?? []).find((o) => o.type === "message");
+  return (message?.content ?? [])
+    .filter((c) => c.type === "output_text")
+    .map((c) => c.text ?? "")
+    .join("");
+}
+
+// Invoke a hosted agent and stream its assistant text deltas via `onDelta`.
+async function streamAgent(
+  agentName: string,
+  input: string,
+  onDelta: (chunk: string) => void
+): Promise<string> {
+  const res = await fetch(responsesUrl(agentName), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${await getToken()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ input, stream: true }),
+  });
+  if (!res.ok || !res.body) {
+    const body = res.body ? await res.text() : "";
+    throw new Error(`${agentName} responded ${res.status}: ${body}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const evt of events) {
+      for (const line of evt.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        let parsed: { type?: string; delta?: string };
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        if (parsed.type === "response.output_text.delta" && parsed.delta) {
+          full += parsed.delta;
+          onDelta(parsed.delta);
+        }
+      }
+    }
+  }
+  return full;
 }
 
 export async function POST(request: NextRequest) {
@@ -56,11 +149,11 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  if (!DEMO_MULTI_AGENT && (!PROJECT_ENDPOINT || !AGENT_ID)) {
+  if (!DEMO_MULTI_AGENT && !PROJECT_ENDPOINT) {
     return new Response(
       JSON.stringify({
         error:
-          "Foundry not configured. Set FOUNDRY_PROJECT_ENDPOINT and FOUNDRY_AGENT_ID (or DEMO_MULTI_AGENT=true).",
+          "Foundry not configured. Set FOUNDRY_PROJECT_ENDPOINT (or DEMO_MULTI_AGENT=true).",
       }),
       { status: 503, headers: { "Content-Type": "application/json" } }
     );
@@ -108,77 +201,59 @@ export async function POST(request: NextRequest) {
         controller.enqueue(encoder.encode(sse(data)));
 
       try {
-        const project = getProject();
-        const agents = project.agents;
-        const ids = await resolveAgentIds(agents);
-        const researcherId = ids[RESEARCHER_NAME];
-        const writerId = ids[WRITER_NAME];
-
-        // Conversation thread (Cosmos-backed by Foundry) for the router turn.
-        let threadId = body.thread_id ?? "";
-        if (!threadId) {
-          const thread = await agents.threads.create();
-          threadId = thread.id;
-        }
-
+        // Hosted agents are stateless (store:false); the thread id is a
+        // client-side conversation handle for the UI to resume rendering.
+        const threadId = body.thread_id || `thread-${crypto.randomUUID()}`;
         send({ type: "start", thread_id: threadId });
-        // The Planner runs first as a router: decide direct vs pipeline.
-        send({ type: "agent_start", agent: AGENT_NAME });
 
-        await agents.messages.create(threadId, "user", lastUser.content);
-        const routerRaw = await runAgentText(agents, threadId, AGENT_ID);
+        // 1) Planner runs as a router: decide direct answer vs. pipeline.
+        send({ type: "agent_start", agent: PLANNER_LABEL });
+        const routerRaw = await invokeAgent(PLANNER_AGENT, lastUser.content);
         const decision = parseDecision(routerRaw);
 
-        if (decision.mode === "pipeline" && researcherId && writerId) {
-          // --- Multi-agent pipeline: only when the request warrants it. ---
+        if (decision.mode === "pipeline") {
           const brief = decision.brief || lastUser.content;
 
-          // 1) Researcher gathers structured findings (buffered).
+          // 2) Researcher gathers structured findings (buffered).
           send({
             type: "agent_handoff",
-            from: AGENT_NAME,
-            to: RESEARCHER_NAME,
+            from: PLANNER_LABEL,
+            to: RESEARCHER_LABEL,
             reason: "Gather supporting facts",
           });
           send({
             type: "tool_running",
-            agent: RESEARCHER_NAME,
+            agent: RESEARCHER_LABEL,
             name: "research",
             call_id: "research",
           });
-          const rThread = (await agents.threads.create()).id;
-          await agents.messages.create(
-            rThread,
-            "user",
+          const findings = await invokeAgent(
+            RESEARCHER_AGENT,
             `User request:\n${lastUser.content}\n\nPlanner brief:\n${brief}`
           );
-          const findings = await runAgentText(agents, rThread, researcherId);
           send({ type: "tool_done", call_id: "research" });
 
-          // 2) Writer composes the final answer (streamed to the client).
+          // 3) Writer composes the final answer (streamed to the client).
           send({
             type: "agent_handoff",
-            from: RESEARCHER_NAME,
-            to: WRITER_NAME,
+            from: RESEARCHER_LABEL,
+            to: WRITER_LABEL,
             reason: "Compose the final answer",
           });
-          const wThread = (await agents.threads.create()).id;
-          await agents.messages.create(
-            wThread,
-            "user",
-            `User request:\n${lastUser.content}\n\nResearcher findings:\n${findings}`
-          );
-          await runAgentText(agents, wThread, writerId, (chunk) =>
-            send({ type: "text_delta", agent: WRITER_NAME, content: chunk })
+          await streamAgent(
+            WRITER_AGENT,
+            `User request:\n${lastUser.content}\n\nResearcher findings:\n${findings}`,
+            (chunk) =>
+              send({ type: "text_delta", agent: WRITER_LABEL, content: chunk })
           );
         } else {
-          // --- Direct answer: the Planner already handled a simple request. ---
+          // Direct answer: the Planner already handled a simple request.
           const answer = (decision.answer ?? routerRaw).trim();
           const CHUNK = 24;
           for (let i = 0; i < answer.length; i += CHUNK) {
             send({
               type: "text_delta",
-              agent: AGENT_NAME,
+              agent: PLANNER_LABEL,
               content: answer.slice(i, i + CHUNK),
             });
           }
@@ -202,66 +277,6 @@ export async function POST(request: NextRequest) {
       Connection: "keep-alive",
     },
   });
-}
-
-// Resolve sub-agent ids (Researcher/Writer) by display name, cached for the
-// lifetime of the server process. The orchestration is client-side now, so we
-// look the ids up rather than threading them through env vars.
-let _agentIdsByName: Record<string, string> | null = null;
-async function resolveAgentIds(
-  agents: AIProjectClient["agents"]
-): Promise<Record<string, string>> {
-  if (_agentIdsByName) return _agentIdsByName;
-  const map: Record<string, string> = {};
-  const list = (
-    agents as unknown as {
-      listAgents: () => AsyncIterable<{ id: string; name?: string }>;
-    }
-  ).listAgents();
-  for await (const agent of list) {
-    if (agent.name) map[agent.name] = agent.id;
-  }
-  _agentIdsByName = map;
-  return map;
-}
-
-// Run an agent to completion on a thread, accumulating its assistant text.
-// `onDelta` (when provided) streams each text chunk to the client.
-async function runAgentText(
-  agents: AIProjectClient["agents"],
-  threadId: string,
-  agentId: string,
-  onDelta?: (chunk: string) => void
-): Promise<string> {
-  const events = await agents.runs.create(threadId, agentId).stream();
-  let text = "";
-  for await (const event of events as AsyncIterable<{
-    event: string;
-    data: unknown;
-  }>) {
-    if (event.event === "thread.message.delta") {
-      const delta = event.data as {
-        delta?: {
-          content?: Array<{ type: string; text?: { value?: string } }>;
-        };
-      };
-      const chunk = (delta.delta?.content ?? [])
-        .filter((c) => c.type === "text")
-        .map((c) => c.text?.value ?? "")
-        .join("");
-      if (chunk) {
-        text += chunk;
-        onDelta?.(chunk);
-      }
-    } else if (event.event === "thread.run.failed") {
-      const run = event.data as { last_error?: { message?: string } };
-      throw new Error(run.last_error?.message ?? "Agent run failed");
-    } else if (event.event === "error") {
-      const err = event.data as { message?: string };
-      throw new Error(err.message ?? "Stream error");
-    }
-  }
-  return text;
 }
 
 // Parse the Planner router's JSON decision, tolerating code fences / stray text.

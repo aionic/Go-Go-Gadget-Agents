@@ -45,6 +45,53 @@ Triggered by Terraform `null_resource` + `local-exec`:
 
 Both re-run only when their script/schema hashes change (see `triggers` in the `.tf` files).
 
+## Application deploy (UI + hosted agents)
+
+Terraform provisions the platform; the application code is deployed imperatively afterwards.
+
+### 1. Entra app for UI sign-in
+
+The UI authenticates users with Entra ID (identity-only). Register an Entra application, add a
+**web** redirect URI matching the UI's HTTPS FQDN (Terraform output `agent_ui_redirect_uri`),
+and supply its client ID / secret to Terraform:
+
+```hcl
+# terraform.tfvars (gitignored)
+azure_ad_client_id     = "<entra-app-client-id>"
+azure_ad_client_secret = "<entra-app-client-secret>"
+```
+
+The client secret is stored as a **native Container App secret** (encrypted by the platform,
+surfaced to the container via `secretRef` — never a plaintext env value). It is **not** stored
+in Key Vault: the project Key Vault has public network access disabled by policy with no private
+endpoint, so neither Terraform nor the app could reach a KV-backed secret. (Future hardening:
+add a Key Vault private endpoint to the CAE VNet, then move the secret to KV.)
+
+### 2. Build & push the UI image
+
+```powershell
+# from agent-ui/
+az acr build --registry <acr-name> --image agent-ui:<tag> .
+```
+
+Set `agent_ui_image = "<acr>.azurecr.io/agent-ui:<tag>"` in `terraform.tfvars` and re-apply so
+the Container App picks up the new revision.
+
+### 3. Deploy the hosted agents
+
+The three agents (`ggga-planner` → `ggga-researcher` → `ggga-writer`) run on the Foundry
+managed agent service and are deployed imperatively with `azd` (each agent *version* is a
+Foundry data-plane object, not a Terraform resource):
+
+```powershell
+# from each hosted-agents/<agent>/
+azd deploy
+```
+
+`azd` builds/pushes the agent image, creates the immutable agent version, and assigns the
+per-agent runtime identity the **Azure AI User** role at the Foundry account scope. See
+[orchestration.md](orchestration.md) for the pipeline and [rbac.md](rbac.md) for identities.
+
 ## Teardown
 
 ```powershell
@@ -61,8 +108,11 @@ Single resource group → one-command teardown.
   (`SearchIndexClient.create_or_update_agent`), which pins a compatible preview API version.
   Earlier raw-REST payloads were rejected (`targetIndexes` not recognized), so the SDK path is
   authoritative — keep the SDK pinned in `scripts/foundry_iq/pyproject.toml`.
-- Networking is **public + IP firewall**; state is **local**. Both are parameterized for later
-  hardening (VNet/private endpoints, remote `azurerm` backend).
+- Networking is **VNet-integrated**: a custom VNet (`network.tf`) hosts the workload-profiles
+  Container Apps Environment (delegated infrastructure subnet) and a **Cosmos DB private
+  endpoint** + private DNS zone, since Cosmos public access is force-disabled by policy. The UI
+  still reaches public endpoints (Foundry, ACR) over the internet. State is **local** —
+  parameterized for later hardening (remote `azurerm` backend).
 
 ## Validated deployment (2026-06) — real-world findings
 

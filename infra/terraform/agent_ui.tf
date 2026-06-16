@@ -28,17 +28,15 @@ locals {
   agent_ui_redirect_uri = "https://${local.agent_ui_fqdn}"
 }
 
-# UAMI needs to invoke the Foundry agent (data plane): thread/run/message
-# operations on the project. This is the built-in role with GUID
-# 53ca6127-db72-4b80-b1b0-d745d6d5456d, published as "Azure AI User" but
-# surfaced as "Foundry User" in some tenants — reference it by stable GUID so
-# the assignment is immune to the display-name difference.
-resource "azurerm_role_assignment" "uami_foundry_ai_user" {
-  scope                            = azapi_resource.foundry_project.id
-  role_definition_id               = "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/53ca6127-db72-4b80-b1b0-d745d6d5456d"
-  principal_id                     = module.uami.principal_id
-  skip_service_principal_aad_check = true
-}
+# The UAMI's "Azure AI User" role (used to invoke the Foundry hosted agents)
+# is declared in rbac.tf (azurerm_role_assignment.uami_foundry_ai_user).
+#
+# Entra client secret as a native Container App secret (encrypted by the
+# platform, surfaced to the app via secretRef — never a plaintext env value).
+# NOTE: the project's Key Vault has public network access disabled by Azure
+# Policy with no private endpoint, so a KV-backed secret can be neither written
+# by Terraform (deployer has no network path) nor read by the app. Revisit a
+# KV-backed secret once a Key Vault private endpoint is added to the CAE VNet.
 
 module "agent_ui" {
   source  = "Azure/avm-res-app-containerapp/azurerm"
@@ -64,6 +62,15 @@ module "agent_ui" {
     }
   ]
 
+  # Native Container App secret (encrypted at rest by the platform); the env
+  # var below references it by name so the value never appears in plaintext.
+  secrets = var.azure_ad_client_secret != "" ? {
+    azure_ad_client_secret = {
+      name  = "azure-ad-client-secret"
+      value = var.azure_ad_client_secret
+    }
+  } : null
+
   template = {
     min_replicas = 1
     max_replicas = 3
@@ -78,10 +85,12 @@ module "agent_ui" {
           # Foundry calls).
           { name = "AZURE_CLIENT_ID", value = module.uami.client_id },
 
-          # Foundry agent target (server-side proxy).
+          # Foundry agent target (server-side proxy). The chat route invokes
+          # the hosted agents (ggga-planner -> ggga-researcher -> ggga-writer)
+          # over the Responses protocol; set DEMO_MULTI_AGENT=false for live
+          # agents. Agent names default in code; override via *_AGENT_NAME.
           { name = "FOUNDRY_PROJECT_ENDPOINT", value = local.foundry_project_endpoint },
-          { name = "FOUNDRY_AGENT_ID", value = var.foundry_agent_id },
-          { name = "FOUNDRY_AGENT_NAME", value = var.foundry_agent_name },
+          { name = "DEMO_MULTI_AGENT", value = "false" },
 
           # Entra ID sign-in (identity-only).
           { name = "AZURE_AD_CLIENT_ID", value = var.azure_ad_client_id },
@@ -95,7 +104,7 @@ module "agent_ui" {
             { name = "COSMOS_FEEDBACK_CONTAINER", value = "feedback" },
           ] : [],
           var.azure_ad_client_secret != "" ? [
-            { name = "AZURE_AD_CLIENT_SECRET", value = var.azure_ad_client_secret }
+            { name = "AZURE_AD_CLIENT_SECRET", secret_name = "azure-ad-client-secret" }
         ] : [])
       }
     ]
@@ -123,18 +132,6 @@ variable "agent_ui_image" {
   default     = "mcr.microsoft.com/k8se/quickstart:latest"
 }
 
-variable "foundry_agent_id" {
-  type        = string
-  description = "ID of the Foundry agent the UI proxies chat to. Created at runtime (Foundry Agent Service); leave empty until the agent exists."
-  default     = ""
-}
-
-variable "foundry_agent_name" {
-  type        = string
-  description = "Display name of the primary Foundry agent, shown in the multi-agent flow UI."
-  default     = "Agent"
-}
-
 variable "foundry_project_endpoint" {
   type        = string
   description = "Explicit Foundry project endpoint for @azure/ai-projects. If empty, derived from the account subdomain + project name."
@@ -149,7 +146,7 @@ variable "azure_ad_client_id" {
 
 variable "azure_ad_client_secret" {
   type        = string
-  description = "Entra ID client secret for the confidential-client token exchange. Optional for PKCE public-client flows. Move to Key Vault for production."
+  description = "Entra ID client secret for the confidential-client token exchange. Optional for PKCE public-client flows. Stored as a native (encrypted) Container App secret and surfaced via secretRef — never a plaintext container env value. Supply via a gitignored tfvars or TF_VAR_azure_ad_client_secret."
   default     = ""
   sensitive   = true
 }

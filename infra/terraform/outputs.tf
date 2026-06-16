@@ -84,11 +84,6 @@ output "cosmos_endpoint" {
   description = "Cosmos DB account endpoint (agent state store)."
 }
 
-output "service_bus_namespace" {
-  value       = var.enable_service_bus ? "${local.abbrs.serviceBus}${var.environment_name}-${local.resource_token}.servicebus.windows.net" : null
-  description = "Service Bus namespace FQDN."
-}
-
 output "acr_login_server" {
   value       = local.acr_login_server
   description = "Azure Container Registry login server for agent images."
