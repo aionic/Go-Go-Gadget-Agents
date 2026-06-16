@@ -10,6 +10,8 @@
 ![Azure Verified Modules](https://img.shields.io/badge/Azure-Verified%20Modules-0078D4?logo=microsoftazure&logoColor=white)
 ![Azure AI Foundry](https://img.shields.io/badge/Azure%20AI-Foundry-0078D4?logo=microsoftazure&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-24-339933?logo=nodedotjs&logoColor=white)
 ![uv](https://img.shields.io/badge/packaging-uv-DE5FE9?logo=astral&logoColor=white)
 ![validate](https://img.shields.io/badge/terraform%20validate-passing-success)
 ![deployment](https://img.shields.io/badge/Azure%20deploy-validated-success?logo=microsoftazure&logoColor=white)
